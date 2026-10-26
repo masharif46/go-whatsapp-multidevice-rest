@@ -295,23 +295,41 @@ func SendText(c echo.Context) error {
 }
 
 // SendMessageGet
-// Handles GET and POST /send/message with query or form parameters for easy third-party / PHPNuxBill integration
+// Handles GET and POST /send/message with query, form, or JSON parameters for easy third-party / PHPNuxBill integration
 func SendMessageGet(c echo.Context) error {
 	var err error
 
-	// Extract secret / token from query param, form, or header
-	secret := strings.TrimSpace(c.QueryParam("secret"))
+	type msgReq struct {
+		Phone   string `json:"phone" form:"phone" query:"phone"`
+		MSISDN  string `json:"msisdn" form:"msisdn" query:"msisdn"`
+		Number  string `json:"number" form:"number" query:"number"`
+		Message string `json:"message" form:"message" query:"message"`
+		Text    string `json:"text" form:"text" query:"text"`
+		Secret  string `json:"secret" form:"secret" query:"secret"`
+		Token   string `json:"token" form:"token" query:"token"`
+		Pass    string `json:"password" form:"password" query:"password"`
+		JID     string `json:"jid" form:"jid" query:"jid"`
+	}
+
+	var req msgReq
+	_ = c.Bind(&req)
+
+	// Fallback to manual extraction if binding missed anything
+	secret := strings.TrimSpace(req.Secret)
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(req.Token)
+	}
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(req.Pass)
+	}
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(c.QueryParam("secret"))
+	}
 	if len(secret) == 0 {
 		secret = strings.TrimSpace(c.FormValue("secret"))
 	}
 	if len(secret) == 0 {
-		secret = strings.TrimSpace(c.QueryParam("token"))
-	}
-	if len(secret) == 0 {
-		secret = strings.TrimSpace(c.FormValue("token"))
-	}
-	if len(secret) == 0 {
-		secret = strings.TrimSpace(c.QueryParam("password"))
+		secret = strings.TrimSpace(c.Request().Header.Get("X-Api-Key"))
 	}
 
 	// Verify secret against AuthBasicPassword or AuthJWTSecret
@@ -320,18 +338,18 @@ func SendMessageGet(c echo.Context) error {
 	}
 
 	// Extract destination phone / number
-	rjid := strings.TrimSpace(c.QueryParam("phone"))
+	rjid := strings.TrimSpace(req.Phone)
 	if len(rjid) == 0 {
-		rjid = strings.TrimSpace(c.QueryParam("msisdn"))
+		rjid = strings.TrimSpace(req.MSISDN)
 	}
 	if len(rjid) == 0 {
-		rjid = strings.TrimSpace(c.QueryParam("number"))
+		rjid = strings.TrimSpace(req.Number)
+	}
+	if len(rjid) == 0 {
+		rjid = strings.TrimSpace(c.QueryParam("phone"))
 	}
 	if len(rjid) == 0 {
 		rjid = strings.TrimSpace(c.FormValue("phone"))
-	}
-	if len(rjid) == 0 {
-		rjid = strings.TrimSpace(c.FormValue("msisdn"))
 	}
 	if len(rjid) == 0 {
 		rjid = strings.TrimSpace(c.FormValue("number"))
@@ -343,15 +361,15 @@ func SendMessageGet(c echo.Context) error {
 	rjid = strings.ReplaceAll(rjid, "-", "")
 
 	// Extract message
-	message := strings.TrimSpace(c.QueryParam("message"))
+	message := strings.TrimSpace(req.Message)
 	if len(message) == 0 {
-		message = strings.TrimSpace(c.QueryParam("text"))
+		message = strings.TrimSpace(req.Text)
+	}
+	if len(message) == 0 {
+		message = strings.TrimSpace(c.QueryParam("message"))
 	}
 	if len(message) == 0 {
 		message = strings.TrimSpace(c.FormValue("message"))
-	}
-	if len(message) == 0 {
-		message = strings.TrimSpace(c.FormValue("text"))
 	}
 	message = strings.Replace(message, "\\n", "\n", -1)
 
@@ -363,7 +381,10 @@ func SendMessageGet(c echo.Context) error {
 	}
 
 	// Determine sender JID
-	jid := strings.TrimSpace(c.QueryParam("jid"))
+	jid := strings.TrimSpace(req.JID)
+	if len(jid) == 0 {
+		jid = strings.TrimSpace(c.QueryParam("jid"))
+	}
 	if len(jid) == 0 {
 		jid = strings.TrimSpace(c.FormValue("jid"))
 	}
