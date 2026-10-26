@@ -51,6 +51,12 @@ func Routes(e *echo.Echo) {
 	e.POST(router.BaseURL+"/group/join", ctlWhatsApp.JoinGroup, middleware.JWTWithConfig(authJWTConfig))
 	e.POST(router.BaseURL+"/group/leave", ctlWhatsApp.LeaveGroup, middleware.JWTWithConfig(authJWTConfig))
 
+	// Route for Direct / PHPNuxBill Integration (GET / POST)
+	e.GET(router.BaseURL+"/send/message", ctlWhatsApp.SendMessageGet)
+	e.POST(router.BaseURL+"/send/message", ctlWhatsApp.SendMessageGet)
+	e.GET("/send/message", ctlWhatsApp.SendMessageGet)
+	e.POST("/send/message", ctlWhatsApp.SendMessageGet)
+
 	e.POST(router.BaseURL+"/send/text", ctlWhatsApp.SendText, middleware.JWTWithConfig(authJWTConfig))
 	e.POST(router.BaseURL+"/send/location", ctlWhatsApp.SendLocation, middleware.JWTWithConfig(authJWTConfig))
 	e.POST(router.BaseURL+"/send/contact", ctlWhatsApp.SendContact, middleware.JWTWithConfig(authJWTConfig))

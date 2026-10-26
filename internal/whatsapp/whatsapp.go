@@ -10,6 +10,7 @@ import (
 	"github.com/golang-jwt/jwt"
 	"github.com/labstack/echo/v4"
 
+	"github.com/dimaskiddo/go-whatsapp-multidevice-rest/pkg/auth"
 	"github.com/dimaskiddo/go-whatsapp-multidevice-rest/pkg/router"
 	pkgWhatsApp "github.com/dimaskiddo/go-whatsapp-multidevice-rest/pkg/whatsapp"
 
@@ -286,6 +287,110 @@ func SendText(c echo.Context) error {
 
 	var resSendMessage typWhatsApp.ResponseSendMessage
 	resSendMessage.MsgID, err = pkgWhatsApp.WhatsAppSendText(jid, reqSendMessage.RJID, reqSendMessage.Message)
+	if err != nil {
+		return router.ResponseInternalError(c, err.Error())
+	}
+
+	return router.ResponseSuccessWithData(c, "Successfully Send Text Message", resSendMessage)
+}
+
+// SendMessageGet
+// Handles GET and POST /send/message with query or form parameters for easy third-party / PHPNuxBill integration
+func SendMessageGet(c echo.Context) error {
+	var err error
+
+	// Extract secret / token from query param, form, or header
+	secret := strings.TrimSpace(c.QueryParam("secret"))
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(c.FormValue("secret"))
+	}
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(c.QueryParam("token"))
+	}
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(c.FormValue("token"))
+	}
+	if len(secret) == 0 {
+		secret = strings.TrimSpace(c.QueryParam("password"))
+	}
+
+	// Verify secret against AuthBasicPassword or AuthJWTSecret
+	if len(auth.AuthBasicPassword) > 0 && secret != auth.AuthBasicPassword && secret != auth.AuthJWTSecret {
+		return router.ResponseBadRequest(c, "Invalid or Missing Secret/Password")
+	}
+
+	// Extract destination phone / number
+	rjid := strings.TrimSpace(c.QueryParam("phone"))
+	if len(rjid) == 0 {
+		rjid = strings.TrimSpace(c.QueryParam("msisdn"))
+	}
+	if len(rjid) == 0 {
+		rjid = strings.TrimSpace(c.QueryParam("number"))
+	}
+	if len(rjid) == 0 {
+		rjid = strings.TrimSpace(c.FormValue("phone"))
+	}
+	if len(rjid) == 0 {
+		rjid = strings.TrimSpace(c.FormValue("msisdn"))
+	}
+	if len(rjid) == 0 {
+		rjid = strings.TrimSpace(c.FormValue("number"))
+	}
+
+	// Clean destination number (strip leading +, spaces, hyphens)
+	rjid = strings.ReplaceAll(rjid, "+", "")
+	rjid = strings.ReplaceAll(rjid, " ", "")
+	rjid = strings.ReplaceAll(rjid, "-", "")
+
+	// Extract message
+	message := strings.TrimSpace(c.QueryParam("message"))
+	if len(message) == 0 {
+		message = strings.TrimSpace(c.QueryParam("text"))
+	}
+	if len(message) == 0 {
+		message = strings.TrimSpace(c.FormValue("message"))
+	}
+	if len(message) == 0 {
+		message = strings.TrimSpace(c.FormValue("text"))
+	}
+	message = strings.Replace(message, "\\n", "\n", -1)
+
+	if len(rjid) == 0 {
+		return router.ResponseBadRequest(c, "Missing Destination Parameter (phone/msisdn/number)")
+	}
+	if len(message) == 0 {
+		return router.ResponseBadRequest(c, "Missing Message Parameter (message/text)")
+	}
+
+	// Determine sender JID
+	jid := strings.TrimSpace(c.QueryParam("jid"))
+	if len(jid) == 0 {
+		jid = strings.TrimSpace(c.FormValue("jid"))
+	}
+
+	// If no JID specified, auto-select the first connected client
+	if len(jid) == 0 {
+		for k, client := range pkgWhatsApp.WhatsAppClient {
+			if client != nil && client.IsConnected() {
+				jid = k
+				break
+			}
+		}
+		// Fallback to any client in the map
+		if len(jid) == 0 {
+			for k := range pkgWhatsApp.WhatsAppClient {
+				jid = k
+				break
+			}
+		}
+	}
+
+	if len(jid) == 0 || pkgWhatsApp.WhatsAppClient[jid] == nil {
+		return router.ResponseInternalError(c, "No WhatsApp client found. Please scan QR or login first.")
+	}
+
+	var resSendMessage typWhatsApp.ResponseSendMessage
+	resSendMessage.MsgID, err = pkgWhatsApp.WhatsAppSendText(jid, rjid, message)
 	if err != nil {
 		return router.ResponseInternalError(c, err.Error())
 	}
