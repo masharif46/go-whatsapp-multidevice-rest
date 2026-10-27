@@ -70,8 +70,17 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 	var err error
 	wabin.IndentXML = true
 
+	// If existing client in map has a deleted or invalid store, clean it up
+	if cli, exists := WhatsAppClient[jid]; exists && cli != nil {
+		if cli.Store == nil || cli.Store.Deleted {
+			cli.Disconnect()
+			WhatsAppClient[jid] = nil
+			delete(WhatsAppClient, jid)
+		}
+	}
+
 	if WhatsAppClient[jid] == nil {
-		if device == nil {
+		if device == nil || device.Deleted {
 			// Initialize New WhatsApp Client Device in Datastore
 			device = WhatsAppDatastore.NewDevice()
 		}
@@ -114,6 +123,16 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 				log.Print(nil).Warnf("WhatsApp disconnected for %s", targetJID)
 			case *events.LoggedOut:
 				log.Print(nil).Warnf("WhatsApp logged out for %s (reason: %v)", targetJID, evt.Reason)
+				if cliRef, ok := WhatsAppClient[targetJID]; ok && cliRef != nil {
+					cliRef.Disconnect()
+					if cliRef.Store != nil && !cliRef.Store.Deleted {
+						_ = cliRef.Store.Delete(context.Background())
+					}
+					delete(WhatsAppClient, targetJID)
+				}
+				liveQRMutex.Lock()
+				delete(liveQRMap, targetJID)
+				liveQRMutex.Unlock()
 			}
 		})
 
@@ -231,18 +250,24 @@ func WhatsAppGenerateQR(qrChan <-chan whatsmeow.QRChannelItem) (string, int) {
 }
 
 func WhatsAppLogin(jid string) (string, int, error) {
+	if WhatsAppClient[jid] == nil || WhatsAppClient[jid].Store == nil || WhatsAppClient[jid].Store.Deleted {
+		WhatsAppInitClient(nil, jid)
+	}
+
 	if WhatsAppClient[jid] == nil {
 		return "", 0, errors.New("WhatsApp Client is not Valid")
 	}
 
 	cli := WhatsAppClient[jid]
 
-	// If already authenticated and has Store.ID
-	if cli.Store.ID != nil {
+	// If already authenticated and has Store.ID and is actively connected
+	if cli.Store != nil && !cli.Store.Deleted && cli.Store.ID != nil {
 		if !cli.IsConnected() {
 			_ = WhatsAppReconnect(jid)
 		}
-		return "WhatsApp Client is Reconnected", 0, nil
+		if cli.IsConnected() {
+			return "WhatsApp Client is Reconnected", 0, nil
+		}
 	}
 
 	state := GetLiveQRState(jid)
@@ -442,6 +467,52 @@ func WhatsAppLogout(jid string) error {
 
 	// Return Error WhatsApp Client is not Valid
 	return errors.New("WhatsApp Client is not Valid")
+}
+
+func WhatsAppUnauthenticatedLogout(jid string) error {
+	liveQRMutex.Lock()
+	delete(liveQRMap, jid)
+	liveQRMutex.Unlock()
+
+	// Disconnect and clean target client
+	if cli, ok := WhatsAppClient[jid]; ok && cli != nil {
+		cli.Disconnect()
+		if cli.Store != nil && !cli.Store.Deleted {
+			_ = cli.Store.Delete(context.Background())
+		}
+	}
+	delete(WhatsAppClient, jid)
+
+	// Clean any other references sharing this client or with deleted stores
+	for k, cli := range WhatsAppClient {
+		if cli == nil || cli.Store == nil || cli.Store.Deleted {
+			delete(WhatsAppClient, k)
+		}
+	}
+
+	return nil
+}
+
+func WhatsAppResetSession(jid string) (string, int, error) {
+	// 1. Force unauthenticated logout of current session
+	_ = WhatsAppUnauthenticatedLogout(jid)
+
+	// 2. Also delete any stale unlinked devices from SQLite datastore
+	devices, err := WhatsAppDatastore.GetAllDevices(context.Background())
+	if err == nil {
+		for _, dev := range devices {
+			if dev != nil && !dev.Deleted && (dev.ID == nil || dev.ID.User == jid) {
+				_ = dev.Delete(context.Background())
+			}
+		}
+	}
+
+	// 3. Initialize fresh device for this session
+	freshDevice := WhatsAppDatastore.NewDevice()
+	WhatsAppInitClient(freshDevice, jid)
+
+	// 4. Trigger fresh login & QR emission
+	return WhatsAppLogin(jid)
 }
 
 func WhatsAppIsClientOK(jid string) error {

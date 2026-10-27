@@ -115,9 +115,9 @@ func GetQR(c echo.Context) error {
 
 	// Check if this session or any registered client is already connected
 	client := pkgWhatsApp.WhatsAppClient[session]
-	if client == nil || client.Store.ID == nil || !client.IsConnected() {
+	if client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected() {
 		for _, cli := range pkgWhatsApp.WhatsAppClient {
-			if cli != nil && cli.Store.ID != nil && cli.IsConnected() {
+			if cli != nil && cli.Store != nil && !cli.Store.Deleted && cli.Store.ID != nil && cli.IsConnected() {
 				client = cli
 				pkgWhatsApp.WhatsAppClient[session] = cli
 				break
@@ -125,7 +125,7 @@ func GetQR(c echo.Context) error {
 		}
 	}
 
-	if client != nil && client.Store.ID != nil && client.IsConnected() {
+	if client != nil && client.Store != nil && !client.Store.Deleted && client.Store.ID != nil && client.IsConnected() {
 		phone := client.Store.ID.User
 		return c.JSON(200, echo.Map{
 			"status":    true,
@@ -137,8 +137,10 @@ func GetQR(c echo.Context) error {
 		})
 	}
 
-	// Initialize client if not yet created
-	pkgWhatsApp.WhatsAppInitClient(nil, session)
+	// Initialize client if not yet created or deleted
+	if pkgWhatsApp.WhatsAppClient[session] == nil || pkgWhatsApp.WhatsAppClient[session].Store == nil || pkgWhatsApp.WhatsAppClient[session].Store.Deleted {
+		pkgWhatsApp.WhatsAppInitClient(nil, session)
+	}
 
 	// Get WhatsApp QR Code Image
 	qrCodeImage, qrCodeTimeout, err := pkgWhatsApp.WhatsAppLogin(session)
@@ -152,11 +154,89 @@ func GetQR(c echo.Context) error {
 	}
 
 	if qrCodeImage == "WhatsApp Client is Reconnected" {
+		phone := ""
+		if client := pkgWhatsApp.WhatsAppClient[session]; client != nil && client.Store != nil && client.Store.ID != nil {
+			phone = client.Store.ID.User
+		}
 		return c.JSON(200, echo.Map{
 			"status":    true,
 			"code":      200,
 			"connected": true,
+			"phone":     phone,
 			"message":   "WhatsApp Client is Reconnected",
+		})
+	}
+
+	qrFormatted := qrCodeImage
+	if len(qrCodeImage) > 0 && !strings.HasPrefix(qrCodeImage, "data:image") {
+		qrFormatted = "data:image/png;base64," + qrCodeImage
+	}
+
+	return c.JSON(200, echo.Map{
+		"status":    true,
+		"code":      200,
+		"connected": false,
+		"qr":        qrFormatted,
+		"timeout":   qrCodeTimeout,
+	})
+}
+
+// RepairSession
+// Forces complete logout/cleanup of any stale session and immediately initializes a new client & generates a fresh pairing QR code
+func RepairSession(c echo.Context) error {
+	session := strings.TrimSpace(c.Param("session"))
+	if len(session) == 0 {
+		session = strings.TrimSpace(c.QueryParam("session"))
+	}
+	if len(session) == 0 {
+		session = "default"
+	}
+
+	qrCodeImage, qrCodeTimeout, err := pkgWhatsApp.WhatsAppResetSession(session)
+	if err != nil {
+		return c.JSON(500, echo.Map{
+			"status":    false,
+			"code":      500,
+			"connected": false,
+			"error":     err.Error(),
+		})
+	}
+
+	qrFormatted := qrCodeImage
+	if len(qrCodeImage) > 0 && !strings.HasPrefix(qrCodeImage, "data:image") {
+		qrFormatted = "data:image/png;base64," + qrCodeImage
+	}
+
+	return c.JSON(200, echo.Map{
+		"status":    true,
+		"code":      200,
+		"connected": false,
+		"repaired":  true,
+		"session":   session,
+		"qr":        qrFormatted,
+		"timeout":   qrCodeTimeout,
+		"message":   "Session reset successfully. Scan QR code to pair new device.",
+	})
+}
+
+// UnauthenticatedLogout
+// Disconnects and deletes the specified session without requiring JWT
+func UnauthenticatedLogout(c echo.Context) error {
+	session := strings.TrimSpace(c.Param("session"))
+	if len(session) == 0 {
+		session = strings.TrimSpace(c.QueryParam("session"))
+	}
+	if len(session) == 0 {
+		session = "default"
+	}
+
+	err := pkgWhatsApp.WhatsAppUnauthenticatedLogout(session)
+	if err != nil {
+		return c.JSON(500, echo.Map{
+			"status":  false,
+			"code":    500,
+			"error":   err.Error(),
+			"message": "Failed to logout session",
 		})
 	}
 
@@ -164,8 +244,8 @@ func GetQR(c echo.Context) error {
 		"status":    true,
 		"code":      200,
 		"connected": false,
-		"qr":        qrCodeImage,
-		"timeout":   qrCodeTimeout,
+		"session":   session,
+		"message":   "Session successfully logged out and deleted",
 	})
 }
 
@@ -180,9 +260,9 @@ func GetSessionStatus(c echo.Context) error {
 	}
 
 	client := pkgWhatsApp.WhatsAppClient[session]
-	if client == nil || client.Store.ID == nil || !client.IsConnected() {
+	if client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected() {
 		for _, cli := range pkgWhatsApp.WhatsAppClient {
-			if cli != nil && cli.Store.ID != nil && cli.IsConnected() {
+			if cli != nil && cli.Store != nil && !cli.Store.Deleted && cli.Store.ID != nil && cli.IsConnected() {
 				client = cli
 				pkgWhatsApp.WhatsAppClient[session] = cli
 				break
@@ -190,7 +270,7 @@ func GetSessionStatus(c echo.Context) error {
 		}
 	}
 
-	if client != nil && client.Store.ID != nil && client.IsConnected() {
+	if client != nil && client.Store != nil && !client.Store.Deleted && client.Store.ID != nil && client.IsConnected() {
 		return c.JSON(200, echo.Map{
 			"status":    true,
 			"code":      200,
@@ -472,6 +552,7 @@ func SendMessageGet(c echo.Context) error {
 		Token   string `json:"token" form:"token" query:"token"`
 		Pass    string `json:"password" form:"password" query:"password"`
 		JID     string `json:"jid" form:"jid" query:"jid"`
+		Session string `json:"session" form:"session" query:"session"`
 	}
 
 	var req msgReq
@@ -543,7 +624,7 @@ func SendMessageGet(c echo.Context) error {
 		return router.ResponseBadRequest(c, "Missing Message Parameter (message/text)")
 	}
 
-	// Determine sender JID
+	// Determine sender JID or session identifier
 	jid := strings.TrimSpace(req.JID)
 	if len(jid) == 0 {
 		jid = strings.TrimSpace(c.QueryParam("jid"))
@@ -551,9 +632,29 @@ func SendMessageGet(c echo.Context) error {
 	if len(jid) == 0 {
 		jid = strings.TrimSpace(c.FormValue("jid"))
 	}
-
-	// If no JID specified, auto-select the first connected client
 	if len(jid) == 0 {
+		jid = strings.TrimSpace(req.Session)
+	}
+	if len(jid) == 0 {
+		jid = strings.TrimSpace(c.QueryParam("session"))
+	}
+	if len(jid) == 0 {
+		jid = strings.TrimSpace(c.FormValue("session"))
+	}
+
+	// If session or JID is specified, verify if that client exists
+	if len(jid) > 0 && pkgWhatsApp.WhatsAppClient[jid] == nil {
+		// If jid is a phone number without @, check matching client
+		for k, client := range pkgWhatsApp.WhatsAppClient {
+			if client != nil && client.Store != nil && client.Store.ID != nil && client.Store.ID.User == jid {
+				jid = k
+				break
+			}
+		}
+	}
+
+	// If no JID specified or client not found, auto-select the first connected client
+	if len(jid) == 0 || pkgWhatsApp.WhatsAppClient[jid] == nil {
 		for k, client := range pkgWhatsApp.WhatsAppClient {
 			if client != nil && client.IsConnected() {
 				jid = k
@@ -561,7 +662,7 @@ func SendMessageGet(c echo.Context) error {
 			}
 		}
 		// Fallback to any client in the map
-		if len(jid) == 0 {
+		if len(jid) == 0 || pkgWhatsApp.WhatsAppClient[jid] == nil {
 			for k := range pkgWhatsApp.WhatsAppClient {
 				jid = k
 				break

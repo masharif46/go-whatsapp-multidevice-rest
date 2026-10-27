@@ -6,3 +6,4 @@ dbs/*
 *.DS_Store
 !*.gitkeep
 .go-whatsapp-multidevice-rest
+/go-whatsapp-multidevice-rest

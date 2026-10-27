@@ -41,6 +41,21 @@ func Routes(e *echo.Echo) {
 	e.POST("/sessions/:session/pair-code", ctlWhatsApp.GetPairCode)
 	e.GET("/sessions/:session/status", ctlWhatsApp.GetSessionStatus)
 	e.GET("/session/status", ctlWhatsApp.GetSessionStatus)
+
+	// Route for Re-pairing, Resetting and Disconnecting Sessions
+	e.GET("/repair", ctlWhatsApp.RepairSession)
+	e.POST("/repair", ctlWhatsApp.RepairSession)
+	e.GET("/sessions/:session/repair", ctlWhatsApp.RepairSession)
+	e.POST("/sessions/:session/repair", ctlWhatsApp.RepairSession)
+	e.GET("/reset", ctlWhatsApp.RepairSession)
+	e.POST("/reset", ctlWhatsApp.RepairSession)
+	e.GET("/sessions/:session/reset", ctlWhatsApp.RepairSession)
+	e.POST("/sessions/:session/reset", ctlWhatsApp.RepairSession)
+	e.GET("/sessions/:session/logout", ctlWhatsApp.UnauthenticatedLogout)
+	e.POST("/sessions/:session/logout", ctlWhatsApp.UnauthenticatedLogout)
+	e.GET("/logout-session", ctlWhatsApp.UnauthenticatedLogout)
+	e.POST("/logout-session", ctlWhatsApp.UnauthenticatedLogout)
+
 	e.GET(router.BaseURL+"/qr", ctlWhatsApp.GetQR)
 	e.GET(router.BaseURL+"/sessions/:session/qr", ctlWhatsApp.GetQR)
 	e.GET(router.BaseURL+"/pair-code", ctlWhatsApp.GetPairCode)
@@ -49,6 +64,14 @@ func Routes(e *echo.Echo) {
 	e.POST(router.BaseURL+"/sessions/:session/pair-code", ctlWhatsApp.GetPairCode)
 	e.GET(router.BaseURL+"/sessions/:session/status", ctlWhatsApp.GetSessionStatus)
 	e.GET(router.BaseURL+"/session/status", ctlWhatsApp.GetSessionStatus)
+	e.GET(router.BaseURL+"/repair", ctlWhatsApp.RepairSession)
+	e.POST(router.BaseURL+"/repair", ctlWhatsApp.RepairSession)
+	e.GET(router.BaseURL+"/sessions/:session/repair", ctlWhatsApp.RepairSession)
+	e.POST(router.BaseURL+"/sessions/:session/repair", ctlWhatsApp.RepairSession)
+	e.GET(router.BaseURL+"/sessions/:session/reset", ctlWhatsApp.RepairSession)
+	e.POST(router.BaseURL+"/sessions/:session/reset", ctlWhatsApp.RepairSession)
+	e.GET(router.BaseURL+"/sessions/:session/logout", ctlWhatsApp.UnauthenticatedLogout)
+	e.POST(router.BaseURL+"/sessions/:session/logout", ctlWhatsApp.UnauthenticatedLogout)
 
 	// Route for OpenAPI / Swagger
 	// ---------------------------------------------
