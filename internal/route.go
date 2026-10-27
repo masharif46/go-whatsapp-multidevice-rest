@@ -21,10 +21,34 @@ func Routes(e *echo.Echo) {
 	// Configure OpenAPI / Swagger
 	docs.SwaggerInfo.BasePath = router.BaseURL
 
-	// Route for Index
+	// Route for Index & Health Checks
 	// ---------------------------------------------
+	e.GET("/", ctlIndex.Index)
+	e.GET("/status", ctlIndex.Index)
+	e.GET("/health", ctlIndex.Index)
 	e.GET(router.BaseURL, ctlIndex.Index)
 	e.GET(router.BaseURL+"/", ctlIndex.Index)
+	e.GET(router.BaseURL+"/status", ctlIndex.Index)
+	e.GET(router.BaseURL+"/health", ctlIndex.Index)
+
+	// Route for Pairing QR Code, Pairing Code & Session Status (supports Filament Admin & third-party)
+	// ---------------------------------------------
+	e.GET("/qr", ctlWhatsApp.GetQR)
+	e.GET("/sessions/:session/qr", ctlWhatsApp.GetQR)
+	e.GET("/pair-code", ctlWhatsApp.GetPairCode)
+	e.POST("/pair-code", ctlWhatsApp.GetPairCode)
+	e.GET("/sessions/:session/pair-code", ctlWhatsApp.GetPairCode)
+	e.POST("/sessions/:session/pair-code", ctlWhatsApp.GetPairCode)
+	e.GET("/sessions/:session/status", ctlWhatsApp.GetSessionStatus)
+	e.GET("/session/status", ctlWhatsApp.GetSessionStatus)
+	e.GET(router.BaseURL+"/qr", ctlWhatsApp.GetQR)
+	e.GET(router.BaseURL+"/sessions/:session/qr", ctlWhatsApp.GetQR)
+	e.GET(router.BaseURL+"/pair-code", ctlWhatsApp.GetPairCode)
+	e.POST(router.BaseURL+"/pair-code", ctlWhatsApp.GetPairCode)
+	e.GET(router.BaseURL+"/sessions/:session/pair-code", ctlWhatsApp.GetPairCode)
+	e.POST(router.BaseURL+"/sessions/:session/pair-code", ctlWhatsApp.GetPairCode)
+	e.GET(router.BaseURL+"/sessions/:session/status", ctlWhatsApp.GetSessionStatus)
+	e.GET(router.BaseURL+"/session/status", ctlWhatsApp.GetSessionStatus)
 
 	// Route for OpenAPI / Swagger
 	// ---------------------------------------------

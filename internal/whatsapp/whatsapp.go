@@ -102,6 +102,169 @@ func Login(c echo.Context) error {
 	return router.ResponseSuccessWithData(c, "Successfully Generated QR Code", resLogin)
 }
 
+// GetQR
+// Returns live status and pairing QR code if session is not yet paired
+func GetQR(c echo.Context) error {
+	session := strings.TrimSpace(c.Param("session"))
+	if len(session) == 0 {
+		session = strings.TrimSpace(c.QueryParam("session"))
+	}
+	if len(session) == 0 {
+		session = "default"
+	}
+
+	// Check if this session or any registered client is already connected
+	client := pkgWhatsApp.WhatsAppClient[session]
+	if client == nil || client.Store.ID == nil || !client.IsConnected() {
+		for _, cli := range pkgWhatsApp.WhatsAppClient {
+			if cli != nil && cli.Store.ID != nil && cli.IsConnected() {
+				client = cli
+				pkgWhatsApp.WhatsAppClient[session] = cli
+				break
+			}
+		}
+	}
+
+	if client != nil && client.Store.ID != nil && client.IsConnected() {
+		phone := client.Store.ID.User
+		return c.JSON(200, echo.Map{
+			"status":    true,
+			"code":      200,
+			"connected": true,
+			"phone":     phone,
+			"push_name": client.Store.PushName,
+			"message":   "WhatsApp Client is Connected",
+		})
+	}
+
+	// Initialize client if not yet created
+	pkgWhatsApp.WhatsAppInitClient(nil, session)
+
+	// Get WhatsApp QR Code Image
+	qrCodeImage, qrCodeTimeout, err := pkgWhatsApp.WhatsAppLogin(session)
+	if err != nil {
+		return c.JSON(500, echo.Map{
+			"status":    false,
+			"code":      500,
+			"connected": false,
+			"error":     err.Error(),
+		})
+	}
+
+	if qrCodeImage == "WhatsApp Client is Reconnected" {
+		return c.JSON(200, echo.Map{
+			"status":    true,
+			"code":      200,
+			"connected": true,
+			"message":   "WhatsApp Client is Reconnected",
+		})
+	}
+
+	return c.JSON(200, echo.Map{
+		"status":    true,
+		"code":      200,
+		"connected": false,
+		"qr":        qrCodeImage,
+		"timeout":   qrCodeTimeout,
+	})
+}
+
+// GetSessionStatus returns connection state and details for a given session or primary device
+func GetSessionStatus(c echo.Context) error {
+	session := strings.TrimSpace(c.Param("session"))
+	if len(session) == 0 {
+		session = strings.TrimSpace(c.QueryParam("session"))
+	}
+	if len(session) == 0 {
+		session = "default"
+	}
+
+	client := pkgWhatsApp.WhatsAppClient[session]
+	if client == nil || client.Store.ID == nil || !client.IsConnected() {
+		for _, cli := range pkgWhatsApp.WhatsAppClient {
+			if cli != nil && cli.Store.ID != nil && cli.IsConnected() {
+				client = cli
+				pkgWhatsApp.WhatsAppClient[session] = cli
+				break
+			}
+		}
+	}
+
+	if client != nil && client.Store.ID != nil && client.IsConnected() {
+		return c.JSON(200, echo.Map{
+			"status":    true,
+			"code":      200,
+			"connected": true,
+			"session":   session,
+			"phone":     client.Store.ID.User,
+			"push_name": client.Store.PushName,
+			"message":   "WhatsApp Client is Connected",
+		})
+	}
+
+	return c.JSON(200, echo.Map{
+		"status":    false,
+		"code":      200,
+		"connected": false,
+		"session":   session,
+		"message":   "WhatsApp Client is not Connected. Scan QR Code to pair.",
+	})
+}
+
+// GetPairCode returns an 8-digit pairing code for linking phone directly without QR scanning
+func GetPairCode(c echo.Context) error {
+	session := strings.TrimSpace(c.Param("session"))
+	if len(session) == 0 {
+		session = strings.TrimSpace(c.QueryParam("session"))
+	}
+	if len(session) == 0 {
+		session = "default"
+	}
+
+	phone := strings.TrimSpace(c.QueryParam("phone"))
+	if len(phone) == 0 {
+		phone = strings.TrimSpace(c.FormValue("phone"))
+	}
+	if len(phone) == 0 {
+		return c.JSON(400, echo.Map{
+			"status": false,
+			"code":   400,
+			"error":  "Missing phone parameter. Please pass phone number with country code, e.g. ?phone=88017xxxxxxxx",
+		})
+	}
+
+	phone = strings.ReplaceAll(phone, "+", "")
+	phone = strings.ReplaceAll(phone, " ", "")
+	phone = strings.ReplaceAll(phone, "-", "")
+
+	pkgWhatsApp.WhatsAppInitClient(nil, session)
+	client := pkgWhatsApp.WhatsAppClient[session]
+	if client != nil && client.Store.ID != nil && client.IsConnected() {
+		return c.JSON(200, echo.Map{
+			"status":    true,
+			"code":      200,
+			"connected": true,
+			"message":   "WhatsApp Client is already Connected",
+		})
+	}
+
+	pairCode, timeout, err := pkgWhatsApp.WhatsAppLoginPairPhone(session, phone)
+	if err != nil {
+		return c.JSON(500, echo.Map{
+			"status": false,
+			"code":   500,
+			"error":  err.Error(),
+		})
+	}
+
+	return c.JSON(200, echo.Map{
+		"status":    true,
+		"code":      200,
+		"pair_code": pairCode,
+		"timeout":   timeout,
+	})
+}
+
 // PairPhone
 // @Summary     Pair Phone for WhatsApp Multi-Device Login
 // @Description Get Pairing Code for WhatsApp Multi-Device Login

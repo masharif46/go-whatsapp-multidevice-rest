@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PuerkitoBio/goquery"
@@ -28,6 +29,8 @@ import (
 	"go.mau.fi/whatsmeow/store"
 	"go.mau.fi/whatsmeow/store/sqlstore"
 	"go.mau.fi/whatsmeow/types"
+	"go.mau.fi/whatsmeow/types/events"
+	waLog "go.mau.fi/whatsmeow/util/log"
 
 	"github.com/dimaskiddo/go-whatsapp-multidevice-rest/pkg/env"
 	"github.com/dimaskiddo/go-whatsapp-multidevice-rest/pkg/log"
@@ -73,12 +76,12 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 			device = WhatsAppDatastore.NewDevice()
 		}
 
-		// Set Client Properties
-		store.DeviceProps.Os = proto.String(WhatsAppGetUserOS())
-		store.DeviceProps.PlatformType = WhatsAppGetUserAgent("chrome").Enum()
+		// Set Operating System and Platform info consistent with WhatsApp Web Companion
+		store.SetOSInfo("macOS", [3]uint32{14, 5, 0})
+		store.DeviceProps.PlatformType = waCompanionReg.DeviceProps_CHROME.Enum()
 		store.DeviceProps.RequireFullSync = proto.Bool(false)
 
-		// Set Client Versions
+		// Set Client Versions if customized in environment
 		version.Major, err = env.GetEnvInt("WHATSAPP_VERSION_MAJOR")
 		if err == nil {
 			store.DeviceProps.Version.Primary = proto.Uint32(uint32(version.Major))
@@ -92,9 +95,27 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 			store.DeviceProps.Version.Tertiary = proto.Uint32(uint32(version.Patch))
 		}
 
-		// Initialize New WhatsApp Client
-		// And Save it to The Map
-		WhatsAppClient[jid] = whatsmeow.NewClient(device, nil)
+		// Initialize New WhatsApp Client with verbose logging
+		waLogger := waLog.Stdout("Whatsmeow", "DEBUG", true)
+		WhatsAppClient[jid] = whatsmeow.NewClient(device, waLogger)
+
+		// Register Event Handlers to capture pairing and connection state
+		targetJID := jid
+		WhatsAppClient[jid].AddEventHandler(func(rawEvt any) {
+			switch evt := rawEvt.(type) {
+			case *events.PairSuccess:
+				userJID := WhatsAppDecomposeJID(evt.ID.User)
+				log.Print(nil).Infof("Device pairing SUCCESS for %s! Primary phone user JID: %s", targetJID, userJID)
+				WhatsAppClient[userJID] = WhatsAppClient[targetJID]
+				_ = WhatsAppClient[targetJID].Store.Save(context.Background())
+			case *events.Connected:
+				log.Print(nil).Infof("WhatsApp connected for %s", targetJID)
+			case *events.Disconnected:
+				log.Print(nil).Warnf("WhatsApp disconnected for %s", targetJID)
+			case *events.LoggedOut:
+				log.Print(nil).Warnf("WhatsApp logged out for %s (reason: %v)", targetJID, evt.Reason)
+			}
+		})
 
 		// Set WhatsApp Client Proxy Address if Proxy URL is Provided
 		if len(WhatsAppClientProxyURL) > 0 {
@@ -163,9 +184,30 @@ func WhatsAppGetUserOS() string {
 	}
 }
 
+type LiveQRData struct {
+	sync.RWMutex
+	Code      string
+	Image     string
+	ExpiresAt time.Time
+}
+
+var liveQRMap = make(map[string]*LiveQRData)
+var liveQRMutex sync.Mutex
+
+func GetLiveQRState(jid string) *LiveQRData {
+	liveQRMutex.Lock()
+	defer liveQRMutex.Unlock()
+	state, exists := liveQRMap[jid]
+	if !exists {
+		state = &LiveQRData{}
+		liveQRMap[jid] = state
+	}
+	return state
+}
+
 func WhatsAppGenerateQR(qrChan <-chan whatsmeow.QRChannelItem) (string, int) {
-	qrChanCode := make(chan string)
-	qrChanTimeout := make(chan int)
+	qrChanCode := make(chan string, 1)
+	qrChanTimeout := make(chan int, 1)
 
 	// Get QR Code Data and Timeout
 	go func() {
@@ -173,53 +215,140 @@ func WhatsAppGenerateQR(qrChan <-chan whatsmeow.QRChannelItem) (string, int) {
 			if evt.Event == "code" {
 				qrChanCode <- evt.Code
 				qrChanTimeout <- int(evt.Timeout.Seconds())
+				return
 			}
 		}
 	}()
 
-	// Generate QR Code Data to PNG Image
-	qrTemp := <-qrChanCode
-	qrPNG, _ := qrCode.Encode(qrTemp, qrCode.Medium, 256)
-
-	// Return QR Code PNG in Base64 Format and Timeout Information
-	return base64.StdEncoding.EncodeToString(qrPNG), <-qrChanTimeout
+	select {
+	case qrTemp := <-qrChanCode:
+		timeout := <-qrChanTimeout
+		qrPNG, _ := qrCode.Encode(qrTemp, qrCode.Medium, 256)
+		return base64.StdEncoding.EncodeToString(qrPNG), timeout
+	case <-time.After(8 * time.Second):
+		return "", 0
+	}
 }
 
 func WhatsAppLogin(jid string) (string, int, error) {
-	if WhatsAppClient[jid] != nil {
-		// Make Sure WebSocket Connection is Disconnected
-		WhatsAppClient[jid].Disconnect()
-
-		if WhatsAppClient[jid].Store.ID == nil {
-			// Device ID is not Exist
-			// Generate QR Code
-			qrChanGenerate, _ := WhatsAppClient[jid].GetQRChannel(context.Background())
-
-			// Connect WebSocket while Initialize QR Code Data to be Sent
-			err := WhatsAppClient[jid].Connect()
-			if err != nil {
-				return "", 0, err
-			}
-
-			// Get Generated QR Code and Timeout Information
-			qrImage, qrTimeout := WhatsAppGenerateQR(qrChanGenerate)
-
-			// Return QR Code in Base64 Format and Timeout Information
-			return "data:image/png;base64," + qrImage, qrTimeout, nil
-		} else {
-			// Device ID is Exist
-			// Reconnect WebSocket
-			err := WhatsAppReconnect(jid)
-			if err != nil {
-				return "", 0, err
-			}
-
-			return "WhatsApp Client is Reconnected", 0, nil
-		}
+	if WhatsAppClient[jid] == nil {
+		return "", 0, errors.New("WhatsApp Client is not Valid")
 	}
 
-	// Return Error WhatsApp Client is not Valid
-	return "", 0, errors.New("WhatsApp Client is not Valid")
+	cli := WhatsAppClient[jid]
+
+	// If already authenticated and has Store.ID
+	if cli.Store.ID != nil {
+		if !cli.IsConnected() {
+			_ = WhatsAppReconnect(jid)
+		}
+		return "WhatsApp Client is Reconnected", 0, nil
+	}
+
+	state := GetLiveQRState(jid)
+	state.RLock()
+	hasValidQR := cli.IsConnected() && len(state.Image) > 0 && time.Now().Before(state.ExpiresAt)
+	currentImage := state.Image
+	remainingTimeout := int(time.Until(state.ExpiresAt).Seconds())
+	state.RUnlock()
+
+	// If currently connected and has a valid QR with >3s remaining, return it immediately without disconnecting!
+	if hasValidQR && remainingTimeout > 3 {
+		return currentImage, remainingTimeout, nil
+	}
+
+	// Disconnect if previously connected before getting a fresh QR channel
+	cli.Disconnect()
+
+	qrChanGenerate, err := cli.GetQRChannel(context.Background())
+	if err != nil {
+		return "", 0, err
+	}
+
+	err = cli.Connect()
+	if err != nil {
+		return "", 0, err
+	}
+
+	codeReceived := make(chan struct{}, 1)
+
+	// Keep listening to the QR channel until closed or paired
+	go func(targetJid string, ch <-chan whatsmeow.QRChannelItem) {
+		firstCode := true
+		for evt := range ch {
+			switch evt.Event {
+			case "code":
+				qrPNG, encErr := qrCode.Encode(evt.Code, qrCode.Medium, 256)
+				if encErr == nil {
+					st := GetLiveQRState(targetJid)
+					st.Lock()
+					st.Code = evt.Code
+					st.Image = "data:image/png;base64," + base64.StdEncoding.EncodeToString(qrPNG)
+					st.ExpiresAt = time.Now().Add(evt.Timeout)
+					st.Unlock()
+					log.Print(nil).Infof("New QR code generated for %s (timeout: %v)", targetJid, evt.Timeout)
+				}
+				if firstCode {
+					firstCode = false
+					select {
+					case codeReceived <- struct{}{}:
+					default:
+					}
+				}
+			case "success":
+				log.Print(nil).Infof("WhatsApp successfully paired for session %s!", targetJid)
+				st := GetLiveQRState(targetJid)
+				st.Lock()
+				st.Image = ""
+				st.ExpiresAt = time.Time{}
+				st.Unlock()
+			case "timeout":
+				log.Print(nil).Warnf("WhatsApp QR channel timeout for %s", targetJid)
+			default:
+				log.Print(nil).Infof("WhatsApp QR channel event: %s for %s", evt.Event, targetJid)
+			}
+		}
+	}(jid, qrChanGenerate)
+
+	select {
+	case <-codeReceived:
+		state.RLock()
+		img := state.Image
+		timeout := int(time.Until(state.ExpiresAt).Seconds())
+		state.RUnlock()
+		return img, timeout, nil
+	case <-time.After(10 * time.Second):
+		return "", 0, errors.New("timeout waiting for QR code from WhatsApp server")
+	}
+}
+
+func WhatsAppLoginPairPhone(jid string, phone string) (string, int, error) {
+	if WhatsAppClient[jid] == nil {
+		return "", 0, errors.New("WhatsApp Client is not Valid")
+	}
+
+	cli := WhatsAppClient[jid]
+	cli.Disconnect()
+
+	if cli.Store.ID == nil {
+		err := cli.Connect()
+		if err != nil {
+			return "", 0, err
+		}
+
+		code, err := cli.PairPhone(context.Background(), phone, true, whatsmeow.PairClientChrome, "Chrome (macOS)")
+		if err != nil {
+			return "", 0, err
+		}
+
+		return code, 160, nil
+	} else {
+		err := WhatsAppReconnect(jid)
+		if err != nil {
+			return "", 0, err
+		}
+		return "WhatsApp Client is Reconnected", 0, nil
+	}
 }
 
 func WhatsAppLoginPair(jid string) (string, int, error) {
