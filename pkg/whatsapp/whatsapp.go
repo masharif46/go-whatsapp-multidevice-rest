@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -117,12 +118,16 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 				log.Print(nil).Infof("Device pairing SUCCESS for %s! Primary phone user JID: %s", targetJID, userJID)
 				WhatsAppClient[userJID] = WhatsAppClient[targetJID]
 				_ = WhatsAppClient[targetJID].Store.Save(context.Background())
+				triggerWebhookEvent("pair_success", targetJID, map[string]interface{}{"phone": userJID})
 			case *events.Connected:
 				log.Print(nil).Infof("WhatsApp connected for %s", targetJID)
+				triggerWebhookEvent("connected", targetJID, nil)
 			case *events.Disconnected:
 				log.Print(nil).Warnf("WhatsApp disconnected for %s", targetJID)
+				triggerWebhookEvent("disconnected", targetJID, nil)
 			case *events.LoggedOut:
 				log.Print(nil).Warnf("WhatsApp logged out for %s (reason: %v)", targetJID, evt.Reason)
+				triggerWebhookEvent("logged_out", targetJID, map[string]interface{}{"reason": fmt.Sprintf("%v", evt.Reason)})
 				if cliRef, ok := WhatsAppClient[targetJID]; ok && cliRef != nil {
 					cliRef.Disconnect()
 					if cliRef.Store != nil && !cliRef.Store.Deleted {
@@ -147,6 +152,47 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 		// Set WhatsApp Client Auto Trust Identity
 		WhatsAppClient[jid].AutoTrustIdentity = true
 	}
+}
+
+func triggerWebhookEvent(event string, session string, payload map[string]interface{}) {
+	webhookURL, _ := env.GetEnvString("WHATSAPP_WEBHOOK_URL")
+	if len(webhookURL) == 0 {
+		webhookURL = "http://127.0.0.1:8005/api/v1/webhooks/whatsapp/baileys"
+	}
+	secret, _ := env.GetEnvString("AUTH_BASIC_PASSWORD")
+	if len(secret) == 0 {
+		secret = "ThisIsPassword"
+	}
+
+	go func() {
+		data := map[string]interface{}{
+			"event":     event,
+			"session":   session,
+			"timestamp": time.Now().UTC().Format(time.RFC3339),
+		}
+		for k, v := range payload {
+			data[k] = v
+		}
+		jsonBytes, err := json.Marshal(data)
+		if err != nil {
+			return
+		}
+
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(jsonBytes))
+		if err != nil {
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Api-Key", secret)
+		req.Header.Set("Authorization", "Bearer "+secret)
+		req.Header.Set("User-Agent", "Go-WhatsApp-Rest/1.0")
+
+		resp, err := client.Do(req)
+		if err == nil && resp != nil {
+			_ = resp.Body.Close()
+		}
+	}()
 }
 
 func WhatsAppGetUserAgent(agentType string) waCompanionReg.DeviceProps_PlatformType {

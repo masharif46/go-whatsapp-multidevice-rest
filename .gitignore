@@ -7,3 +7,4 @@ dbs/*
 !*.gitkeep
 .go-whatsapp-multidevice-rest
 /go-whatsapp-multidevice-rest
+whatsapp.log
