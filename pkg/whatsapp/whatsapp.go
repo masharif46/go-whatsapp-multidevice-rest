@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"runtime"
 	"strings"
 	"sync"
@@ -42,7 +43,62 @@ var WhatsAppClient = make(map[string]*whatsmeow.Client)
 
 var (
 	WhatsAppClientProxyURL string
+	sessionMapMutex        sync.RWMutex
+	sessionMapFile         = "dbs/sessions.json"
 )
+
+func LoadSessionMappings() map[string]string {
+	sessionMapMutex.RLock()
+	defer sessionMapMutex.RUnlock()
+
+	data, err := os.ReadFile(sessionMapFile)
+	if err != nil {
+		return make(map[string]string)
+	}
+
+	var m map[string]string
+	if err := json.Unmarshal(data, &m); err != nil {
+		return make(map[string]string)
+	}
+	return m
+}
+
+func SaveSessionMapping(session string, phone string) {
+	sessionMapMutex.Lock()
+	defer sessionMapMutex.Unlock()
+
+	data, err := os.ReadFile(sessionMapFile)
+	m := make(map[string]string)
+	if err == nil {
+		_ = json.Unmarshal(data, &m)
+	}
+
+	m[session] = phone
+
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(sessionMapFile, out, 0644)
+	}
+}
+
+func RemoveSessionMapping(session string) {
+	sessionMapMutex.Lock()
+	defer sessionMapMutex.Unlock()
+
+	data, err := os.ReadFile(sessionMapFile)
+	if err != nil {
+		return
+	}
+	m := make(map[string]string)
+	_ = json.Unmarshal(data, &m)
+
+	delete(m, session)
+
+	out, err := json.MarshalIndent(m, "", "  ")
+	if err == nil {
+		_ = os.WriteFile(sessionMapFile, out, 0644)
+	}
+}
 
 func init() {
 	var err error
@@ -118,6 +174,7 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 				log.Print(nil).Infof("Device pairing SUCCESS for %s! Primary phone user JID: %s", targetJID, userJID)
 				WhatsAppClient[userJID] = WhatsAppClient[targetJID]
 				_ = WhatsAppClient[targetJID].Store.Save(context.Background())
+				SaveSessionMapping(targetJID, userJID)
 				triggerWebhookEvent("pair_success", targetJID, map[string]interface{}{"phone": userJID})
 			case *events.Connected:
 				log.Print(nil).Infof("WhatsApp connected for %s", targetJID)
@@ -516,6 +573,8 @@ func WhatsAppLogout(jid string) error {
 }
 
 func WhatsAppUnauthenticatedLogout(jid string) error {
+	RemoveSessionMapping(jid)
+
 	liveQRMutex.Lock()
 	delete(liveQRMap, jid)
 	liveQRMutex.Unlock()

@@ -113,14 +113,25 @@ func GetQR(c echo.Context) error {
 		session = "default"
 	}
 
-	// Check if this session or any registered client is already connected
+	// Check if this session is already connected
 	client := pkgWhatsApp.WhatsAppClient[session]
+	if client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected() {
+		mappings := pkgWhatsApp.LoadSessionMappings()
+		if phone, exists := mappings[session]; exists {
+			if cli, ok := pkgWhatsApp.WhatsAppClient[phone]; ok && cli != nil && cli.IsConnected() {
+				client = cli
+				pkgWhatsApp.WhatsAppClient[session] = cli
+			}
+		}
+	}
 	if client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected() {
 		for _, cli := range pkgWhatsApp.WhatsAppClient {
 			if cli != nil && cli.Store != nil && !cli.Store.Deleted && cli.Store.ID != nil && cli.IsConnected() {
-				client = cli
-				pkgWhatsApp.WhatsAppClient[session] = cli
-				break
+				if cli.Store.ID.User == session {
+					client = cli
+					pkgWhatsApp.WhatsAppClient[session] = cli
+					break
+				}
 			}
 		}
 	}
@@ -261,10 +272,32 @@ func GetSessionStatus(c echo.Context) error {
 
 	client := pkgWhatsApp.WhatsAppClient[session]
 	if client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected() {
+		mappings := pkgWhatsApp.LoadSessionMappings()
+		if phone, exists := mappings[session]; exists {
+			if cli, ok := pkgWhatsApp.WhatsAppClient[phone]; ok && cli != nil && cli.IsConnected() {
+				client = cli
+				pkgWhatsApp.WhatsAppClient[session] = cli
+			}
+		}
+	}
+
+	if client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected() {
+		for _, cli := range pkgWhatsApp.WhatsAppClient {
+			if cli != nil && cli.Store != nil && !cli.Store.Deleted && cli.Store.ID != nil && cli.IsConnected() {
+				if cli.Store.ID.User == session {
+					client = cli
+					pkgWhatsApp.WhatsAppClient[session] = cli
+					break
+				}
+			}
+		}
+	}
+
+	// Only if session is "default", allow fallback to the first connected client
+	if session == "default" && (client == nil || client.Store == nil || client.Store.Deleted || client.Store.ID == nil || !client.IsConnected()) {
 		for _, cli := range pkgWhatsApp.WhatsAppClient {
 			if cli != nil && cli.Store != nil && !cli.Store.Deleted && cli.Store.ID != nil && cli.IsConnected() {
 				client = cli
-				pkgWhatsApp.WhatsAppClient[session] = cli
 				break
 			}
 		}

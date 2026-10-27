@@ -36,4 +36,13 @@ func Startup() {
 			log.Print(nil).Error(err.Error())
 		}
 	}
+
+	// Map configured session aliases to devices
+	mappings := pkgWhatsApp.LoadSessionMappings()
+	for sessionName, phone := range mappings {
+		if cli, ok := pkgWhatsApp.WhatsAppClient[phone]; ok && cli != nil {
+			log.Print(nil).Infof("Mapped session alias %s -> %s", sessionName, phone)
+			pkgWhatsApp.WhatsAppClient[sessionName] = cli
+		}
+	}
 }
