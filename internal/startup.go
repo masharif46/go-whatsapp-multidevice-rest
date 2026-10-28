@@ -45,4 +45,15 @@ func Startup() {
 			pkgWhatsApp.WhatsAppClient[sessionName] = cli
 		}
 	}
+
+	// Ensure 'default' alias is mapped to the primary client
+	if pkgWhatsApp.WhatsAppClient["default"] == nil {
+		for _, cli := range pkgWhatsApp.WhatsAppClient {
+			if cli != nil && cli.Store != nil && cli.Store.ID != nil {
+				pkgWhatsApp.WhatsAppClient["default"] = cli
+				log.Print(nil).Infof("Mapped fallback session alias 'default' -> %s", cli.Store.ID.User)
+				break
+			}
+		}
+	}
 }

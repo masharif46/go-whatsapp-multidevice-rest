@@ -173,8 +173,10 @@ func WhatsAppInitClient(device *store.Device, jid string) {
 				userJID := WhatsAppDecomposeJID(evt.ID.User)
 				log.Print(nil).Infof("Device pairing SUCCESS for %s! Primary phone user JID: %s", targetJID, userJID)
 				WhatsAppClient[userJID] = WhatsAppClient[targetJID]
+				WhatsAppClient["default"] = WhatsAppClient[targetJID]
 				_ = WhatsAppClient[targetJID].Store.Save(context.Background())
 				SaveSessionMapping(targetJID, userJID)
+				SaveSessionMapping("default", userJID)
 				triggerWebhookEvent("pair_success", targetJID, map[string]interface{}{"phone": userJID})
 			case *events.Connected:
 				log.Print(nil).Infof("WhatsApp connected for %s", targetJID)
@@ -621,13 +623,24 @@ func WhatsAppResetSession(jid string) (string, int, error) {
 }
 
 func WhatsAppIsClientOK(jid string) error {
+	client := WhatsAppClient[jid]
+	if client == nil {
+		return errors.New("WhatsApp Client is not Valid")
+	}
+
+	// If authenticated device is temporarily disconnected from websocket, attempt quick reconnect
+	if client.Store != nil && client.Store.ID != nil && !client.IsConnected() {
+		_ = client.Connect()
+		time.Sleep(500 * time.Millisecond)
+	}
+
 	// Make Sure WhatsApp Client is Connected
-	if !WhatsAppClient[jid].IsConnected() {
+	if !client.IsConnected() {
 		return errors.New("WhatsApp Client is not Connected")
 	}
 
 	// Make Sure WhatsApp Client is Logged In
-	if !WhatsAppClient[jid].IsLoggedIn() {
+	if !client.IsLoggedIn() {
 		return errors.New("WhatsApp Client is not Logged In")
 	}
 
